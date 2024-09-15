@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
+import os
 import numpy as np
 import torch as th
 
@@ -133,15 +134,25 @@ def karras_sample_progressive(
     s_tmax=float("inf"),
     s_noise=1.0,
     guidance_scale=0.0,
+    injection_dir=None,
+    injection_indices=None
 ):
     sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, rho, device=device)
-    x_T = th.randn(*shape, device=device) * sigma_max
+    if injection_dir is not None:
+        x_T_path = os.path.join(injection_dir, "x_T.pt")
+        if os.path.exists(x_T_path):
+            x_T = th.load(x_T_path)
+        else:
+            x_T = th.randn(*shape, device=device) * sigma_max
+            th.save(x_T, x_T_path)
+    else:
+        x_T = th.randn(*shape, device=device) * sigma_max
     sample_fn = {"heun": sample_heun, "dpm": sample_dpm, "ancestral": sample_euler_ancestral}[
         sampler
     ]
 
     if sampler != "ancestral":
-        sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise)
+        sampler_args = dict(s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise, injection_dir=injection_dir, injection_indices=injection_indices)
     else:
         sampler_args = {}
 
@@ -245,6 +256,8 @@ def sample_heun(
     s_tmin=0.0,
     s_tmax=float("inf"),
     s_noise=1.0,
+    injection_dir=None,
+    injection_indices=None
 ):
     """Implements Algorithm 2 (Heun steps) from Karras et al. (2022)."""
     s_in = x.new_ones([x.shape[0]])
@@ -258,7 +271,15 @@ def sample_heun(
         gamma = (
             min(s_churn / (len(sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigmas[i] <= s_tmax else 0.0
         )
-        eps = th.randn_like(x) * s_noise
+        if injection_dir is not None:
+            eps_path = os.path.join(injection_dir, f"eps_{i}.pt")
+            if os.path.exists(eps_path):
+                eps = th.load(eps_path)
+            else:
+                eps = th.randn_like(x) * s_noise
+                th.save(eps, eps_path)
+        else:
+            eps = th.randn_like(x) * s_noise
         sigma_hat = sigmas[i] * (gamma + 1)
         if gamma > 0:
             x = x + eps * (sigma_hat**2 - sigmas[i] ** 2) ** 0.5
@@ -276,6 +297,14 @@ def sample_heun(
             d_2 = to_d(x_2, sigmas[i + 1], denoised_2)
             d_prime = (d + d_2) / 2
             x = x + d_prime * dt
+        if injection_dir is not None:
+            x_path = os.path.join(injection_dir, f"x_{i}.pt")
+            if injection_indices is None:
+                if not os.path.exists(x_path):
+                    th.save(x, x_path)
+            else:
+                prev_x = th.load(x_path)
+                x[:, :, injection_indices] = prev_x[:, :, injection_indices]
     yield {"x": x, "pred_xstart": denoised}
 
 

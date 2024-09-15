@@ -1,5 +1,6 @@
 from typing import Optional, Tuple
 
+import mitsuba as mi
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -62,3 +63,96 @@ def plot_point_cloud(
                 ax.set_zlim3d(fixed_bounds[0][2], fixed_bounds[1][2])
 
     return fig
+
+
+# source: https://github.com/hasancaslan/BeautifulPointCloud
+class XMLTemplates:
+    HEAD = """
+<scene version="0.6.0">
+    <integrator type="path">
+        <integer name="maxDepth" value="-1"/>
+    </integrator>
+    <sensor type="perspective">
+        <float name="farClip" value="100"/>
+        <float name="nearClip" value="0.1"/>
+        <transform name="toWorld">
+            <lookat origin="3,3,3" target="0,0,0" up="0,0,1"/>
+        </transform>
+        <float name="fov" value="25"/>
+        <sampler type="independent">
+            <integer name="sampleCount" value="256"/>
+        </sampler>
+        <film type="hdrfilm">
+            <integer name="width" value="540"/> <!-- Set to 540 for square aspect ratio -->
+            <integer name="height" value="540"/> <!-- Set to 540 for square aspect ratio -->
+            <rfilter type="gaussian"/>
+        </film>
+    </sensor>
+    
+    <bsdf type="roughplastic" id="surfaceMaterial">
+        <string name="distribution" value="ggx"/>
+        <float name="alpha" value="0.05"/>
+        <float name="intIOR" value="1.46"/>
+        <rgb name="diffuseReflectance" value="1,1,1"/> <!-- default 0.5 -->
+    </bsdf>
+"""
+    BALL_SEGMENT = """
+    <shape type="sphere">
+        <float name="radius" value="0.015"/>
+        <transform name="toWorld">
+            <translate x="{}" y="{}" z="{}"/>
+        </transform>
+        <bsdf type="diffuse">
+            <rgb name="reflectance" value="{},{},{}"/>
+        </bsdf>
+    </shape>
+"""
+    TAIL = """
+    <shape type="rectangle">
+        <ref name="bsdf" id="surfaceMaterial"/>
+        <transform name="toWorld">
+            <scale x="10" y="10" z="1"/>
+            <translate x="0" y="0" z="-0.5"/>
+        </transform>
+    </shape>
+    
+    <shape type="rectangle">
+        <transform name="toWorld">
+            <scale x="10" y="10" z="1"/>
+            <lookat origin="-4,4,20" target="0,0,0" up="0,0,1"/>
+        </transform>
+        <emitter type="area">
+            <rgb name="radiance" value="6,6,6"/>
+        </emitter>
+    </shape>
+</scene>
+"""
+
+
+def render_point_cloud(
+    pc: PointCloud,
+    output_path: str = None,
+):
+    c = pc.coords
+    xml_segments = [XMLTemplates.HEAD]
+    for point in c:
+        color = np.clip(
+            np.array([point[0] + 0.5, point[1] + 0.5, point[2] + 0.5 - 0.0125]),
+            0.001,
+            1.0,
+        )
+        color /= np.linalg.norm(color)
+        xml_segments.append(
+            XMLTemplates.BALL_SEGMENT.format(point[0], point[1], point[2], *color)
+        )
+    xml_segments.append(XMLTemplates.TAIL)
+    xml_content = "".join(xml_segments)
+    mi.set_variant("scalar_rgb")
+    scene = mi.load_string(xml_content)
+    img = mi.render(scene)
+    if output_path is not None:
+        mi.util.write_bitmap(output_path, img)
+    img = np.array(img)
+    img = np.clip(img, 0, 1)
+    img = (img * 255).astype(np.uint8)
+    return img
